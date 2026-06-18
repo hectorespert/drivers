@@ -33,14 +33,29 @@ se necesitaría crear múltiples instancias del driver con la misma IP, lo cual 
 ## Objetivo
 
 Permitir que una sola instancia del driver gestione **N salidas** de un dispositivo Tasmota,
-**manteniendo compatibilidad total** con la configuración y comportamiento existentes.
+**sin añadir nuevos parámetros de configuración**, reinterpretando el parámetro `"Output"` existente.
 
-## Requisitos de Compatibilidad
+## Redefinición del parámetro `"Output"`
 
-1. El parámetro `"Output"` debe seguir funcionándose como antes
-2. Cuando solo se pasa `"Output"`, el driver se comporta exactamente igual que antes (1 pin)
-3. Los nombres de pin y numeración deben ser consistentes con el uso actual
-4. Las URLs de la API Tasmota generadas deben ser idénticas al comportamiento actual
+Se reinterpreta `"Output"` como **número de salidas** (cantidad), en lugar de "cuál salida usar":
+
+| Valor de "Output" | Comportamiento |
+|-------------------|---------------|
+| `0` (default) | 1 pin: Power0 (comportamiento legacy idéntico) |
+| `1` | 1 pin: Power1 |
+| `2` | 2 pins: Power1, Power2 |
+| `4` | 4 pins: Power1, Power2, Power3, Power4 |
+
+### Compatibilidad
+
+- `"Output": "0"` o ausente → **Idéntico al actual**: 1 pin en Power0
+- `"Output": "1"` → **Idéntico al actual**: 1 pin en Power1
+- `"Output": ">1"` → **Cambio de comportamiento**: antes controlaba 1 salida específica, ahora crea N salidas
+
+> **Nota**: Los usuarios que usaban `"Output": "2"` para controlar *específicamente* Power2
+> ahora obtendrán 2 pins (Power1 y Power2). Esto es un breaking change para ese caso,
+> pero se considera aceptable dado que el uso principal de Output > 1 en dispositivos
+> multi-relé es precisamente controlar todas las salidas disponibles.
 
 ## Cambios Propuestos
 
@@ -60,62 +75,36 @@ Extraer la lógica de pin (Write, Set, LastState, Name, Number, Close) a un stru
 - Añadir campo `pins []*tasmotaPin`
 - Los métodos `Pins()`, `DigitalOutputPins()`, `DigitalOutputPin(int)`, `PWMChannels()`, `PWMChannel(int)` 
   iterarán sobre el slice de pins
-- `DigitalOutputPin(n)` y `PWMChannel(n)` acceden por **índice** del slice (0-based)
 
-### 3. Añadir parámetro `"Outputs"` (nuevo, opcional)
-
-- Añadir un **nuevo** parámetro `"Outputs"` (integer, default: 0)
-- Semántica: número total de salidas a crear (desde Power1 hasta PowerN)
-- `"Outputs": 0` o ausente → modo legacy, usa `"Output"` como antes
-
-### 4. Lógica de creación en `NewDriver`
+### 3. Lógica de creación en `NewDriver`
 
 ```
-Si "Outputs" > 0:
-    → Crear N pins: pin[0]=Power1, pin[1]=Power2, ..., pin[N-1]=PowerN
-    → Ignorar "Output"
-Si no:
-    → Modo legacy: crear 1 solo pin con el número indicado en "Output"
-    → Comportamiento idéntico al actual
+Si Output == 0:
+    → Crear 1 pin en Power0 (legacy)
+Si Output == 1:
+    → Crear 1 pin en Power1
+Si Output > 1:
+    → Crear N pins: Power1, Power2, ..., PowerN
 ```
 
-### 5. Validación de parámetros
+### 4. Validación de parámetros
 
 - `"Address"`: obligatorio, string, longitud 1-255 (sin cambios)
-- `"Output"`: opcional, integer >= 0, default 0 (sin cambios)
-- `"Outputs"`: opcional, integer >= 0, default 0 (nuevo)
-- Si `"Outputs" > 0` y `"Output" > 0` simultáneamente: usar `"Outputs"` (prioridad al nuevo)
-
-## Impacto en la API
-
-### Modo Legacy (retrocompatible, sin cambios funcionales)
-
-| Configuración | Comportamiento |
-|--------------|----------------|
-| `{"Address": "192.168.1.46", "Output": "2"}` | 1 pin, Power2, idéntico al actual |
-| `{"Address": "192.168.1.46"}` | 1 pin, Power0, idéntico al actual |
-
-### Modo Múltiples Salidas (nuevo)
-
-| Configuración | Comportamiento |
-|--------------|----------------|
-| `{"Address": "192.168.1.46", "Outputs": "4"}` | 4 pins: Power1, Power2, Power3, Power4 |
-| `{"Address": "192.168.1.46", "Outputs": "1"}` | 1 pin: Power1 |
+- `"Output"`: opcional, integer >= 0, default 0 (sin cambios en tipo ni validación)
 
 ## Tests
 
-### Tests existentes (no deben romperse)
+### Tests existentes (deben actualizarse mínimamente)
 
-- `TestHttpDriver_AsDigitalOut`: Mantener con `"Output": "2"` → 1 pin, comportamiento legacy
-- `TestHttpDriver_AsPWMDriver`: Mantener con `"Output": "0"` → 1 pin, comportamiento legacy
-- `TestHttpDriver_FactoryValidateParameters`: Mantener validaciones de `"Address"`
+- `TestHttpDriver_AsDigitalOut`: Usaba `"Output": "2"` → ahora producirá 2 pins. Actualizar assertions.
+- `TestHttpDriver_AsPWMDriver`: Usaba `"Output": "0"` → sigue igual (1 pin, Power0)
+- `TestHttpDriver_FactoryValidateParameters`: Sin cambios en validación
 
 ### Tests nuevos a añadir
 
-- `TestHttpDriver_MultipleOutputs`: Configurar con `"Outputs": "4"`, verificar 4 pins
-- `TestHttpDriver_OutputsOverridesOutput`: Verificar que `"Outputs"` tiene prioridad sobre `"Output"`
+- `TestHttpDriver_MultipleOutputs`: Configurar con `"Output": "4"`, verificar 4 pins
+- `TestHttpDriver_SingleOutput`: Verificar que `"Output": "1"` crea 1 pin en Power1
 - `TestHttpDriver_PinBoundsCheck`: Verificar error al acceder a pin fuera de rango
-- `TestHttpDriver_LegacyCompatibility`: Verificar que sin `"Outputs"` funciona exactamente igual
 
 ## Correcciones adicionales (opcionales, en commit separado)
 
@@ -125,4 +114,5 @@ Si no:
 ## Referencia
 
 Se sigue el patrón del driver `shelly/shelly25.go` que maneja 2 relés con un slice de `[]*Relay`.
+
 
