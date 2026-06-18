@@ -241,7 +241,7 @@ func (f *factory) ValidateParameters(parameters map[string]interface{}) (bool, m
 			failure := fmt.Sprint(outputs, " is not an integer. ", v, " was received.")
 			failures[outputs] = append(failures[outputs], failure)
 		} else if val < 1 {
-			failure := fmt.Sprint(outputs, " value should be greater than 0. ", val, " was received.")
+			failure := fmt.Sprint(outputs, " value should be at least 1. ", val, " was received.")
 			failures[outputs] = append(failures[outputs], failure)
 		}
 	} else {

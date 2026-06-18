@@ -1,6 +1,7 @@
 package tasmota
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -271,11 +272,13 @@ func TestHttpDriver_MultipleOutputs(t *testing.T) {
 		if err != nil {
 			t.Errorf("Expected pin %d, got error: %v", i, err)
 		}
-		expectedName := "Tasmota Pin " + string(rune('1'+i))
+		expectedName := fmt.Sprintf("Tasmota Pin %d", i+1)
+		if pin.Name() != expectedName {
+			t.Errorf("Expected pin name %q, found: %q", expectedName, pin.Name())
+		}
 		if pin.Number() != i+1 {
 			t.Errorf("Expected pin number %d, found: %d", i+1, pin.Number())
 		}
-		_ = expectedName
 	}
 
 	pins, err := d.Pins(hal.DigitalOutput)
