@@ -33,29 +33,41 @@ se necesitaría crear múltiples instancias del driver con la misma IP, lo cual 
 ## Objetivo
 
 Permitir que una sola instancia del driver gestione **N salidas** de un dispositivo Tasmota,
-**sin añadir nuevos parámetros de configuración**, reinterpretando el parámetro `"Output"` existente.
+**añadiendo un nuevo parámetro `"Outputs"`** y manteniendo `"Output"` sin cambios para 
+compatibilidad total hacia atrás.
 
-## Redefinición del parámetro `"Output"`
+## Nuevo parámetro `"Outputs"`
 
-Se reinterpreta `"Output"` como **número de salidas** (cantidad), en lugar de "cuál salida usar":
+Se añade un parámetro **nuevo** `"Outputs"` (nótese la "s" final) que indica el número total
+de salidas del dispositivo. El parámetro `"Output"` mantiene su significado original.
 
-| Valor de "Output" | Comportamiento |
-|-------------------|---------------|
-| `0` (default) | 1 pin: Power0 (comportamiento legacy idéntico) |
-| `1` | 1 pin: Power1 |
-| `2` | 2 pins: Power1, Power2 |
-| `4` | 4 pins: Power1, Power2, Power3, Power4 |
+### Configuración nueva
 
-### Compatibilidad
+```json
+{
+  "Address": "192.168.1.46",
+  "Output": "2",
+  "Outputs": "4"
+}
+```
 
-- `"Output": "0"` o ausente → **Idéntico al actual**: 1 pin en Power0
-- `"Output": "1"` → **Idéntico al actual**: 1 pin en Power1
-- `"Output": ">1"` → **Cambio de comportamiento**: antes controlaba 1 salida específica, ahora crea N salidas
+- `Address` (string): IP del dispositivo Tasmota (sin cambios)
+- `Output` (integer, default: 0): Número de salida a controlar en modo single-pin (sin cambios)
+- `Outputs` (integer, default: 0): **NUEVO** - Número total de salidas. Si > 0, crea múltiples pins.
 
-> **Nota**: Los usuarios que usaban `"Output": "2"` para controlar *específicamente* Power2
-> ahora obtendrán 2 pins (Power1 y Power2). Esto es un breaking change para ese caso,
-> pero se considera aceptable dado que el uso principal de Output > 1 en dispositivos
-> multi-relé es precisamente controlar todas las salidas disponibles.
+### Lógica de comportamiento
+
+| "Outputs" | "Output" | Comportamiento |
+|-----------|----------|---------------|
+| `0` (default/ausente) | cualquier valor | **Modo legacy**: 1 pin en Power\<Output\> (idéntico al actual) |
+| `2` | (ignorado) | 2 pins: Power1, Power2 |
+| `4` | (ignorado) | 4 pins: Power1, Power2, Power3, Power4 |
+
+### Compatibilidad total
+
+- **Sin `"Outputs"`**: comportamiento 100% idéntico al actual. Ningún breaking change.
+- **Con `"Outputs"` > 0**: modo multi-pin. El parámetro `"Output"` se ignora en este modo.
+- Los tests existentes no requieren modificación alguna.
 
 ## Cambios Propuestos
 
@@ -79,40 +91,46 @@ Extraer la lógica de pin (Write, Set, LastState, Name, Number, Close) a un stru
 ### 3. Lógica de creación en `NewDriver`
 
 ```
-Si Output == 0:
-    → Crear 1 pin en Power0 (legacy)
-Si Output == 1:
-    → Crear 1 pin en Power1
-Si Output > 1:
-    → Crear N pins: Power1, Power2, ..., PowerN
+Si Outputs == 0 (o ausente):
+    → Modo legacy: Crear 1 pin en Power<Output> (comportamiento actual)
+Si Outputs > 0:
+    → Modo multi-pin: Crear N pins: Power1, Power2, ..., PowerN
+    → Se ignora el valor de "Output"
 ```
 
-### 4. Validación de parámetros
+### 4. Nuevo parámetro en la factory
+
+Añadir a `parameters`:
+```go
+{
+    Name:    "Outputs",
+    Type:    hal.Integer,
+    Order:   2,
+    Default: 0,
+}
+```
+
+### 5. Validación de parámetros
 
 - `"Address"`: obligatorio, string, longitud 1-255 (sin cambios)
-- `"Output"`: opcional, integer >= 0, default 0 (sin cambios en tipo ni validación)
+- `"Output"`: opcional, integer >= 0, default 0 (sin cambios)
+- `"Outputs"`: opcional, integer >= 0, default 0 (nuevo)
 
 ## Tests
 
-### Tests existentes (deben actualizarse mínimamente)
+### Tests existentes (sin cambios necesarios)
 
-- `TestHttpDriver_AsDigitalOut`: Usaba `"Output": "2"` → ahora producirá 2 pins. Actualizar assertions.
-- `TestHttpDriver_AsPWMDriver`: Usaba `"Output": "0"` → sigue igual (1 pin, Power0)
-- `TestHttpDriver_FactoryValidateParameters`: Sin cambios en validación
+- `TestHttpDriver_AsDigitalOut`: Usa `"Output": "2"` sin `"Outputs"` → modo legacy, 1 pin. Sin cambios.
+- `TestHttpDriver_AsPWMDriver`: Usa `"Output": "0"` → modo legacy, 1 pin. Sin cambios.
+- `TestHttpDriver_FactoryValidateParameters`: Sin cambios.
 
 ### Tests nuevos a añadir
 
-- `TestHttpDriver_MultipleOutputs`: Configurar con `"Output": "4"`, verificar 4 pins
-- `TestHttpDriver_SingleOutput`: Verificar que `"Output": "1"` crea 1 pin en Power1
+- `TestHttpDriver_MultipleOutputs`: Configurar con `"Outputs": "4"`, verificar 4 pins (Power1-Power4)
+- `TestHttpDriver_MultipleOutputs_DigitalOutput`: Verificar interfaz DigitalOutputDriver con múltiples pins
+- `TestHttpDriver_MultipleOutputs_PWM`: Verificar interfaz PWMDriver con múltiples pins
 - `TestHttpDriver_PinBoundsCheck`: Verificar error al acceder a pin fuera de rango
-
-## Correcciones adicionales (opcionales, en commit separado)
-
-- Corregir el default de Address: `"192.1.168.4"` → `"192.168.1.4"`
-- El comando Dimmer en modo múltiple usará `Dimmer<n>` en lugar de solo `Dimmer`
 
 ## Referencia
 
 Se sigue el patrón del driver `shelly/shelly25.go` que maneja 2 relés con un slice de `[]*Relay`.
-
-
