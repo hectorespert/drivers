@@ -100,7 +100,6 @@ func parseOutputs(config string) ([]int, error) {
 type httpDriver struct {
 	meta     hal.Metadata
 	address  string
-	output   int // Kept for backward compatibility
 	outputs  []int
 	pins     []hal.DigitalOutputPin
 	channels []hal.PWMChannel
@@ -176,70 +175,6 @@ func (m *httpDriver) readBody(body io.ReadCloser) ([]byte, error) {
 	return msg, nil
 }
 
-func (m *httpDriver) LastState() bool {
-	const urlBase = "http://%s/cm?cmnd=Power%d"
-	uri := fmt.Sprintf(urlBase, m.address, m.output)
-	resp, err := m.doRequest(uri)
-	if err != nil {
-		return false
-	}
-	if resp.StatusCode != 200 {
-		return false
-	}
-	body, err := m.readBody(resp.Body)
-	if err != nil {
-		return false
-	}
-	var result map[string]interface{}
-	err = json.Unmarshal(body, &result)
-	if err != nil {
-		return false
-	}
-
-	if result[fmt.Sprintf("POWER%d", m.output)] == "ON" {
-		return true
-	}
-
-	if result["POWER"] == "ON" {
-		return true
-	}
-
-	return false
-}
-
-func (m *httpDriver) Set(value float64) error {
-	const urlBase = "http://%s/cm?cmnd=Dimmer%%20%.0f"
-	uri := fmt.Sprintf(urlBase, m.address, value)
-	resp, err := m.doRequest(uri)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode == 200 {
-		return nil
-	}
-	body, err := m.readBody(resp.Body)
-	if err != nil {
-		return err
-	}
-	return fmt.Errorf("HTTP Code:%d. Body:%v", resp.StatusCode, string(body))
-}
-
-func (m *httpDriver) Write(b bool) error {
-	const baseUri = "http://%s/cm?cmnd=Power%d%%20%t"
-	uri := fmt.Sprintf(baseUri, m.address, m.output, b)
-	resp, err := m.doRequest(uri)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode == 200 {
-		return nil
-	}
-	body, err := m.readBody(resp.Body)
-	if err != nil {
-		return err
-	}
-	return fmt.Errorf("HTTP Code:%d. Body:%v", resp.StatusCode, string(body))
-}
 
 func (m *httpDriver) DigitalOutputPins() []hal.DigitalOutputPin {
 	return m.pins
@@ -520,7 +455,6 @@ func (f *factory) NewDriver(parameters map[string]interface{}, hardwareResources
 	driver := &httpDriver{
 		meta:     f.meta,
 		address:  parameters[address].(string),
-		output:   outputs[0], // Keep first output for backward compatibility
 		outputs:  outputs,
 		pins:     []hal.DigitalOutputPin{},
 		channels: []hal.PWMChannel{},
