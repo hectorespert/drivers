@@ -615,3 +615,130 @@ func TestHttpDriver_BackwardCompatibility_SingleIntegerOutput(t *testing.T) {
 		t.Error("Expected state true")
 	}
 }
+
+func TestValidation_ValidOutputFormats(t *testing.T) {
+	server := mockTasmotaServer(t)
+	defer server.Close()
+
+	address := server.URL[7:]
+	f := HttpDriverFactory()
+
+	testCases := []struct {
+		name   string
+		output interface{}
+	}{
+		{"single digit", 1},
+		{"single string", "1"},
+		{"discrete outputs", "1,2,3"},
+		{"range outputs", "1-5"},
+		{"mixed format", "1-3,5,7-9"},
+	}
+
+	for _, tc := range testCases {
+		params := map[string]interface{}{
+			"Address": address,
+			"Output":  tc.output,
+		}
+
+		_, err := f.NewDriver(params, nil)
+		if err != nil {
+			t.Errorf("Output format '%v' (%s): unexpected error: %v", tc.output, tc.name, err)
+		}
+	}
+}
+
+func TestValidation_InvalidOutputConfigs(t *testing.T) {
+	server := mockTasmotaServer(t)
+	defer server.Close()
+
+	address := server.URL[7:]
+	f := HttpDriverFactory()
+
+	testCases := []struct {
+		name   string
+		output interface{}
+	}{
+		{"empty string", ""},
+		{"negative number", -1},
+		{"duplicate outputs", "1,1,2"},
+		{"reversed range", "5-1"},
+		{"invalid format", "abc"},
+		{"invalid range", "1-a"},
+	}
+
+	for _, tc := range testCases {
+		params := map[string]interface{}{
+			"Address": address,
+			"Output":  tc.output,
+		}
+
+		_, err := f.NewDriver(params, nil)
+		if err == nil {
+			t.Errorf("Output '%v' (%s): expected error but got none", tc.output, tc.name)
+		}
+	}
+}
+
+func TestValidation_MissingAddress(t *testing.T) {
+	f := HttpDriverFactory()
+
+	params := map[string]interface{}{
+		"Output": "1",
+	}
+
+	_, err := f.NewDriver(params, nil)
+	if err == nil {
+		t.Error("Expected error for missing address")
+	}
+}
+
+func TestValidation_EmptyAddress(t *testing.T) {
+	f := HttpDriverFactory()
+
+	params := map[string]interface{}{
+		"Address": "",
+		"Output":  "1",
+	}
+
+	_, err := f.NewDriver(params, nil)
+	if err == nil {
+		t.Error("Expected error for empty address")
+	}
+}
+
+func TestValidation_InvalidAddressType(t *testing.T) {
+	f := HttpDriverFactory()
+
+	params := map[string]interface{}{
+		"Address": 12345,
+		"Output":  "1",
+	}
+
+	_, err := f.NewDriver(params, nil)
+	if err == nil {
+		t.Error("Expected error for non-string address")
+	}
+}
+
+func TestValidation_MissingOutput(t *testing.T) {
+	f := HttpDriverFactory()
+
+	params := map[string]interface{}{
+		"Address": "192.168.1.1",
+	}
+
+	// Should not error - Output should default to "1"
+	d, err := f.NewDriver(params, nil)
+	if err != nil {
+		t.Errorf("Expected no error with default output, got: %v", err)
+	}
+
+	dout, ok := d.(hal.DigitalOutputDriver)
+	if !ok {
+		t.Fatal("Failed to type to DigitalOutputDriver")
+	}
+
+	if len(dout.DigitalOutputPins()) != 1 {
+		t.Errorf("Expected 1 pin with default output, got %d", len(dout.DigitalOutputPins()))
+	}
+}
