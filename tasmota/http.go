@@ -146,11 +146,14 @@ func (m *httpDriver) Pins(capability hal.Capability) ([]hal.Pin, error) {
 }
 
 func (m *httpDriver) PWMChannels() []hal.PWMChannel {
-	return []hal.PWMChannel{m}
+	return m.channels
 }
 
-func (m *httpDriver) PWMChannel(_ int) (hal.PWMChannel, error) {
-	return m, nil
+func (m *httpDriver) PWMChannel(index int) (hal.PWMChannel, error) {
+	if index < 0 || index >= len(m.channels) {
+		return nil, fmt.Errorf("PWM channel index %d out of range (0-%d)", index, len(m.channels)-1)
+	}
+	return m.channels[index], nil
 }
 
 func (m *httpDriver) doRequest(url string) (*http.Response, error) {
@@ -239,11 +242,14 @@ func (m *httpDriver) Write(b bool) error {
 }
 
 func (m *httpDriver) DigitalOutputPins() []hal.DigitalOutputPin {
-	return []hal.DigitalOutputPin{m}
+	return m.pins
 }
 
-func (m *httpDriver) DigitalOutputPin(_ int) (hal.DigitalOutputPin, error) {
-	return m, nil
+func (m *httpDriver) DigitalOutputPin(index int) (hal.DigitalOutputPin, error) {
+	if index < 0 || index >= len(m.pins) {
+		return nil, fmt.Errorf("digital output pin index %d out of range (0-%d)", index, len(m.pins)-1)
+	}
+	return m.pins[index], nil
 }
 
 // pinDriver methods
