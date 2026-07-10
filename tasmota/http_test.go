@@ -742,3 +742,254 @@ func TestValidation_MissingOutput(t *testing.T) {
 		t.Errorf("Expected 1 pin with default output, got %d", len(dout.DigitalOutputPins()))
 	}
 }
+
+// mockErrorTasmotaServer creates a mock Tasmota server that returns errors
+func mockErrorTasmotaServer(t *testing.T, statusCode int) *httptest.Server {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(statusCode)
+		w.Write([]byte("Error"))
+	}))
+	return server
+}
+
+// mockMalformedJsonServer creates a mock server that returns malformed JSON
+func mockMalformedJsonServer(t *testing.T) *httptest.Server {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("{invalid json"))
+	}))
+	return server
+}
+
+func TestEdgeCase_SingleOutput_ZeroIndex(t *testing.T) {
+	server := mockTasmotaServer(t)
+	defer server.Close()
+
+	address := server.URL[7:]
+
+	f := HttpDriverFactory()
+	params := map[string]interface{}{
+		"Address": address,
+		"Output":  "0",
+	}
+
+	d, err := f.NewDriver(params, nil)
+	if err != nil {
+		t.Fatal("Failed to create driver with output 0:", err)
+	}
+
+	dout, ok := d.(hal.DigitalOutputDriver)
+	if !ok {
+		t.Fatal("Failed to type to DigitalOutputDriver")
+	}
+
+	if len(dout.DigitalOutputPins()) != 1 {
+		t.Errorf("Expected 1 pin for output 0, got %d", len(dout.DigitalOutputPins()))
+	}
+
+	pin, err := dout.DigitalOutputPin(0)
+	if err != nil {
+		t.Fatal("Failed to get pin:", err)
+	}
+
+	err = pin.Write(true)
+	if err != nil {
+		t.Fatal("Failed to write:", err)
+	}
+}
+
+func TestEdgeCase_LargeOutputNumber(t *testing.T) {
+	server := mockTasmotaServer(t)
+	defer server.Close()
+
+	address := server.URL[7:]
+
+	f := HttpDriverFactory()
+	params := map[string]interface{}{
+		"Address": address,
+		"Output":  "32",
+	}
+
+	d, err := f.NewDriver(params, nil)
+	if err != nil {
+		t.Fatal("Failed to create driver with output 32:", err)
+	}
+
+	dout, ok := d.(hal.DigitalOutputDriver)
+	if !ok {
+		t.Fatal("Failed to type to DigitalOutputDriver")
+	}
+
+	if len(dout.DigitalOutputPins()) != 1 {
+		t.Errorf("Expected 1 pin for output 32, got %d", len(dout.DigitalOutputPins()))
+	}
+}
+
+func TestEdgeCase_WideOutputRange(t *testing.T) {
+	server := mockTasmotaServer(t)
+	defer server.Close()
+
+	address := server.URL[7:]
+
+	f := HttpDriverFactory()
+	params := map[string]interface{}{
+		"Address": address,
+		"Output":  "1-10",
+	}
+
+	d, err := f.NewDriver(params, nil)
+	if err != nil {
+		t.Fatal("Failed to create driver with range 1-10:", err)
+	}
+
+	dout, ok := d.(hal.DigitalOutputDriver)
+	if !ok {
+		t.Fatal("Failed to type to DigitalOutputDriver")
+	}
+
+	if len(dout.DigitalOutputPins()) != 10 {
+		t.Errorf("Expected 10 pins for range 1-10, got %d", len(dout.DigitalOutputPins()))
+	}
+}
+
+func TestErrorScenario_HTTPError500(t *testing.T) {
+	server := mockErrorTasmotaServer(t, 500)
+	defer server.Close()
+
+	address := server.URL[7:]
+
+	f := HttpDriverFactory()
+	params := map[string]interface{}{
+		"Address": address,
+		"Output":  "1",
+	}
+
+	d, err := f.NewDriver(params, nil)
+	if err != nil {
+		t.Fatal("Failed to create driver:", err)
+	}
+
+	dout, ok := d.(hal.DigitalOutputDriver)
+	if !ok {
+		t.Fatal("Failed to type to DigitalOutputDriver")
+	}
+
+	pin, err := dout.DigitalOutputPin(0)
+	if err != nil {
+		t.Fatal("Failed to get pin:", err)
+	}
+
+	err = pin.Write(true)
+	if err == nil {
+		t.Error("Expected error on HTTP 500, got nil")
+	}
+}
+
+func TestErrorScenario_MalformedJSON(t *testing.T) {
+	server := mockMalformedJsonServer(t)
+	defer server.Close()
+
+	address := server.URL[7:]
+
+	f := HttpDriverFactory()
+	params := map[string]interface{}{
+		"Address": address,
+		"Output":  "1",
+	}
+
+	d, err := f.NewDriver(params, nil)
+	if err != nil {
+		t.Fatal("Failed to create driver:", err)
+	}
+
+	dout, ok := d.(hal.DigitalOutputDriver)
+	if !ok {
+		t.Fatal("Failed to type to DigitalOutputDriver")
+	}
+
+	pin, err := dout.DigitalOutputPin(0)
+	if err != nil {
+		t.Fatal("Failed to get pin:", err)
+	}
+
+	// LastState should return false on malformed JSON
+	state := pin.LastState()
+	if state {
+		t.Error("Expected LastState to return false on malformed JSON")
+	}
+}
+
+func TestEdgeCase_MultipleOutputsConsistentState(t *testing.T) {
+	server := mockTasmotaServer(t)
+	defer server.Close()
+
+	address := server.URL[7:]
+
+	f := HttpDriverFactory()
+	params := map[string]interface{}{
+		"Address": address,
+		"Output":  "1,2,3",
+	}
+
+	d, err := f.NewDriver(params, nil)
+	if err != nil {
+		t.Fatal("Failed to create driver:", err)
+	}
+
+	dout, ok := d.(hal.DigitalOutputDriver)
+	if !ok {
+		t.Fatal("Failed to type to DigitalOutputDriver")
+	}
+
+	// Set all outputs to true
+	for i := 0; i < 3; i++ {
+		pin, err := dout.DigitalOutputPin(i)
+		if err != nil {
+			t.Fatalf("Failed to get pin %d: %v", i, err)
+		}
+
+		err = pin.Write(true)
+		if err != nil {
+			t.Fatalf("Pin %d: Failed to write true: %v", i, err)
+		}
+	}
+
+	// Verify all are true
+	for i := 0; i < 3; i++ {
+		pin, err := dout.DigitalOutputPin(i)
+		if err != nil {
+			t.Fatalf("Failed to get pin %d: %v", i, err)
+		}
+
+		state := pin.LastState()
+		if !state {
+			t.Errorf("Pin %d: Expected state true, got false", i)
+		}
+	}
+
+	// Set all to false
+	for i := 0; i < 3; i++ {
+		pin, err := dout.DigitalOutputPin(i)
+		if err != nil {
+			t.Fatalf("Failed to get pin %d: %v", i, err)
+		}
+
+		err = pin.Write(false)
+		if err != nil {
+			t.Fatalf("Pin %d: Failed to write false: %v", i, err)
+		}
+	}
+
+	// Verify all are false
+	for i := 0; i < 3; i++ {
+		pin, err := dout.DigitalOutputPin(i)
+		if err != nil {
+			t.Fatalf("Failed to get pin %d: %v", i, err)
+		}
+
+		state := pin.LastState()
+		if state {
+			t.Errorf("Pin %d: Expected state false, got true", i)
+		}
+	}
+}
