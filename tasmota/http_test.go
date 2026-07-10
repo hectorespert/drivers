@@ -395,3 +395,223 @@ func TestHttpDriver_FactoryValidateParameters(t *testing.T) {
 	}
 
 }
+
+func TestHttpDriver_MultiOutput_DiscreteOutputs(t *testing.T) {
+	server := mockTasmotaServer(t)
+	defer server.Close()
+
+	address := server.URL[7:] // Remove "http://"
+
+	f := HttpDriverFactory()
+
+	params := map[string]interface{}{
+		"Address": address,
+		"Output":  "1,2,3",
+	}
+
+	d, err := f.NewDriver(params, nil)
+	if err != nil {
+		t.Fatal("Failed to create driver:", err)
+	}
+
+	// Check digital output pins
+	dout, ok := d.(hal.DigitalOutputDriver)
+	if !ok {
+		t.Fatal("Failed to type to DigitalOutputDriver")
+	}
+
+	if len(dout.DigitalOutputPins()) != 3 {
+		t.Errorf("Expected 3 digital output pins, got %d", len(dout.DigitalOutputPins()))
+	}
+
+	// Test each pin
+	for i := 0; i < 3; i++ {
+		pin, err := dout.DigitalOutputPin(i)
+		if err != nil {
+			t.Errorf("Failed to get pin %d: %v", i, err)
+		}
+
+		// Test Write
+		err = pin.Write(true)
+		if err != nil {
+			t.Errorf("Pin %d: Failed to write true: %v", i, err)
+		}
+
+		state := pin.LastState()
+		if !state {
+			t.Errorf("Pin %d: Expected LastState true, got false", i)
+		}
+
+		// Test Write false
+		err = pin.Write(false)
+		if err != nil {
+			t.Errorf("Pin %d: Failed to write false: %v", i, err)
+		}
+
+		state = pin.LastState()
+		if state {
+			t.Errorf("Pin %d: Expected LastState false, got true", i)
+		}
+	}
+
+	// Check PWM channels
+	pwm, ok := d.(hal.PWMDriver)
+	if !ok {
+		t.Fatal("Failed to type to PWMDriver")
+	}
+
+	if len(pwm.PWMChannels()) != 3 {
+		t.Errorf("Expected 3 PWM channels, got %d", len(pwm.PWMChannels()))
+	}
+
+	// Test each channel - note: Dimmer is a global Tasmota command
+	for i := 0; i < 3; i++ {
+		ch, err := pwm.PWMChannel(i)
+		if err != nil {
+			t.Errorf("Failed to get channel %d: %v", i, err)
+		}
+
+		// Test Set - verify no errors
+		err = ch.Set(100)
+		if err != nil {
+			t.Errorf("Channel %d: Failed to set 100: %v", i, err)
+		}
+
+		// Test Set to 0
+		err = ch.Set(0)
+		if err != nil {
+			t.Errorf("Channel %d: Failed to set 0: %v", i, err)
+		}
+	}
+}
+
+func TestHttpDriver_MultiOutput_Range(t *testing.T) {
+	server := mockTasmotaServer(t)
+	defer server.Close()
+
+	address := server.URL[7:] // Remove "http://"
+
+	f := HttpDriverFactory()
+
+	params := map[string]interface{}{
+		"Address": address,
+		"Output":  "1-3",
+	}
+
+	d, err := f.NewDriver(params, nil)
+	if err != nil {
+		t.Fatal("Failed to create driver:", err)
+	}
+
+	// Check digital output pins
+	dout, ok := d.(hal.DigitalOutputDriver)
+	if !ok {
+		t.Fatal("Failed to type to DigitalOutputDriver")
+	}
+
+	pins := dout.DigitalOutputPins()
+	if len(pins) != 3 {
+		t.Errorf("Expected 3 digital output pins from range 1-3, got %d", len(pins))
+	}
+
+	// Test that each pin can be controlled independently
+	for i := 0; i < 3; i++ {
+		pin, err := dout.DigitalOutputPin(i)
+		if err != nil {
+			t.Errorf("Failed to get pin %d: %v", i, err)
+		}
+
+		err = pin.Write(true)
+		if err != nil {
+			t.Errorf("Pin %d: Failed to write: %v", i, err)
+		}
+
+		if !pin.LastState() {
+			t.Errorf("Pin %d: Expected state true, got false", i)
+		}
+	}
+}
+
+func TestHttpDriver_MultiOutput_OutOfBounds(t *testing.T) {
+	server := mockTasmotaServer(t)
+	defer server.Close()
+
+	address := server.URL[7:] // Remove "http://"
+
+	f := HttpDriverFactory()
+
+	params := map[string]interface{}{
+		"Address": address,
+		"Output":  "1,2",
+	}
+
+	d, err := f.NewDriver(params, nil)
+	if err != nil {
+		t.Fatal("Failed to create driver:", err)
+	}
+
+	dout, ok := d.(hal.DigitalOutputDriver)
+	if !ok {
+		t.Fatal("Failed to type to DigitalOutputDriver")
+	}
+
+	// Try to access out-of-bounds pin
+	_, err = dout.DigitalOutputPin(5)
+	if err == nil {
+		t.Error("Expected error for out-of-bounds pin access")
+	}
+
+	pwm, ok := d.(hal.PWMDriver)
+	if !ok {
+		t.Fatal("Failed to type to PWMDriver")
+	}
+
+	// Try to access out-of-bounds channel
+	_, err = pwm.PWMChannel(5)
+	if err == nil {
+		t.Error("Expected error for out-of-bounds channel access")
+	}
+}
+
+func TestHttpDriver_BackwardCompatibility_SingleIntegerOutput(t *testing.T) {
+	server := mockTasmotaServer(t)
+	defer server.Close()
+
+	address := server.URL[7:] // Remove "http://"
+
+	f := HttpDriverFactory()
+
+	// Test with integer output (old format)
+	params := map[string]interface{}{
+		"Address": address,
+		"Output":  1,
+	}
+
+	d, err := f.NewDriver(params, nil)
+	if err != nil {
+		t.Fatal("Failed to create driver with integer output:", err)
+	}
+
+	dout, ok := d.(hal.DigitalOutputDriver)
+	if !ok {
+		t.Fatal("Failed to type to DigitalOutputDriver")
+	}
+
+	if len(dout.DigitalOutputPins()) != 1 {
+		t.Errorf("Expected 1 pin, got %d", len(dout.DigitalOutputPins()))
+	}
+
+	pin, err := dout.DigitalOutputPin(0)
+	if err != nil {
+		t.Fatal("Failed to get pin:", err)
+	}
+
+	err = pin.Write(true)
+	if err != nil {
+		t.Fatal("Failed to write:", err)
+	}
+
+	if !pin.LastState() {
+		t.Error("Expected state true")
+	}
+}
