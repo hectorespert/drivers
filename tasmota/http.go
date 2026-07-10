@@ -98,9 +98,12 @@ func parseOutputs(config string) ([]int, error) {
 }
 
 type httpDriver struct {
-	meta    hal.Metadata
-	address string
-	output  int
+	meta     hal.Metadata
+	address  string
+	output   int // Kept for backward compatibility
+	outputs  []int
+	pins     []hal.DigitalOutputPin
+	channels []hal.PWMChannel
 }
 
 // pinDriver represents a digital output pin on a Tasmota device
@@ -245,6 +248,10 @@ func (m *httpDriver) DigitalOutputPin(_ int) (hal.DigitalOutputPin, error) {
 
 // pinDriver methods
 
+func (p *pinDriver) Close() error {
+	return nil
+}
+
 func (p *pinDriver) Name() string {
 	return "Tasmota"
 }
@@ -303,6 +310,10 @@ func (p *pinDriver) LastState() bool {
 
 // channelDriver methods
 
+func (c *channelDriver) Close() error {
+	return nil
+}
+
 func (c *channelDriver) Name() string {
 	return "Tasmota"
 }
@@ -314,6 +325,23 @@ func (c *channelDriver) Number() int {
 func (c *channelDriver) Set(value float64) error {
 	const urlBase = "http://%s/cm?cmnd=Dimmer%%20%.0f"
 	uri := fmt.Sprintf(urlBase, c.driver.address, value)
+	resp, err := c.driver.doRequest(uri)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode == 200 {
+		return nil
+	}
+	body, err := c.driver.readBody(resp.Body)
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("HTTP Code:%d. Body:%v", resp.StatusCode, string(body))
+}
+
+func (c *channelDriver) Write(b bool) error {
+	const baseUri = "http://%s/cm?cmnd=Power%d%%20%t"
+	uri := fmt.Sprintf(baseUri, c.driver.address, c.number, b)
 	resp, err := c.driver.doRequest(uri)
 	if err != nil {
 		return err
@@ -424,14 +452,25 @@ func (f *factory) ValidateParameters(parameters map[string]interface{}) (bool, m
 	}
 
 	if v, ok := parameters[output]; ok {
-		val, ok := v.(int)
-		if !ok {
-			failure := fmt.Sprint(output, " is not an integer. ", v, " was received.")
+		// Accept both string and integer for backward compatibility
+		var outputConfig string
+		switch val := v.(type) {
+		case string:
+			outputConfig = val
+		case int:
+			outputConfig = strconv.Itoa(val)
+		default:
+			failure := fmt.Sprint(output, " must be string or integer. ", v, " was received.")
 			failures[output] = append(failures[output], failure)
+		}
 
-		} else if val < 0 {
-			failure := fmt.Sprint(output, " value should be greater than 0. ", val, " was received.")
-			failures[output] = append(failures[output], failure)
+		if len(outputConfig) > 0 {
+			// Validate the output configuration
+			_, err := parseOutputs(outputConfig)
+			if err != nil {
+				failure := fmt.Sprint(output, " configuration is invalid: ", err.Error())
+				failures[output] = append(failures[output], failure)
+			}
 		}
 	} else {
 		failure := fmt.Sprint(output, " is a required parameter, but was not received.")
@@ -447,22 +486,51 @@ func (f *factory) Metadata() hal.Metadata {
 
 func (f *factory) NewDriver(parameters map[string]interface{}, hardwareResources interface{}) (hal.Driver, error) {
 	if parameters[output] == nil {
-		parameters[output] = "0"
+		parameters[output] = "1"
 	}
 
-	if outputStr, ok := parameters[output].(string); ok {
-		if outputInt, err := strconv.Atoi(outputStr); err == nil {
-			parameters[output] = outputInt
-		}
+	// Convert output to string for consistent processing
+	var outputStr string
+	if outputInt, ok := parameters[output].(int); ok {
+		outputStr = strconv.Itoa(outputInt)
+	} else if str, ok := parameters[output].(string); ok {
+		outputStr = str
+	} else {
+		return nil, fmt.Errorf("output must be int or string, got %T", parameters[output])
 	}
+	parameters[output] = outputStr
 
 	if valid, failures := f.ValidateParameters(parameters); !valid {
 		return nil, errors.New(hal.ToErrorString(failures))
 	}
-	driver := &httpDriver{
-		meta:    f.meta,
-		address: parameters[address].(string),
-		output:  parameters[output].(int),
+
+	// Parse output configuration
+	outputs, err := parseOutputs(outputStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid output configuration: %v", err)
 	}
+
+	// Create driver
+	driver := &httpDriver{
+		meta:     f.meta,
+		address:  parameters[address].(string),
+		output:   outputs[0], // Keep first output for backward compatibility
+		outputs:  outputs,
+		pins:     []hal.DigitalOutputPin{},
+		channels: []hal.PWMChannel{},
+	}
+
+	// Create pin and channel objects for each output
+	for _, outNum := range outputs {
+		driver.pins = append(driver.pins, &pinDriver{
+			driver: driver,
+			number: outNum,
+		})
+		driver.channels = append(driver.channels, &channelDriver{
+			driver: driver,
+			number: outNum,
+		})
+	}
+
 	return driver, nil
 }
