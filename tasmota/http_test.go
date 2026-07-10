@@ -1,18 +1,132 @@
 package tasmota
 
 import (
+	"encoding/json"
+	"fmt"
 	"github.com/reef-pi/hal"
-	"os"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
+// mockTasmotaServer creates a mock Tasmota device server for testing
+func mockTasmotaServer(t *testing.T) *httptest.Server {
+	// In-memory store for device state
+	powerStates := make(map[int]bool)
+	dimmerStates := make(map[int]float64)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cmnd := r.URL.Query().Get("cmnd")
+		if cmnd == "" {
+			http.Error(w, "Missing cmnd parameter", http.StatusBadRequest)
+			return
+		}
+
+		// Parse command - format: "Command<n> value" or "Command value"
+		response := make(map[string]interface{})
+
+		// Handle Power commands
+		if len(cmnd) >= 5 && cmnd[:5] == "Power" {
+			// Extract output number and value
+			var outputNum int
+			var value string
+
+			// Check if it's Power<n> or just Power
+			if len(cmnd) > 5 && cmnd[5] >= '0' && cmnd[5] <= '9' {
+				// Power<n> format
+				fmt.Sscanf(cmnd[5:], "%d", &outputNum)
+				// Find where the number ends
+				i := 5
+				for i < len(cmnd) && cmnd[i] >= '0' && cmnd[i] <= '9' {
+					i++
+				}
+				if i < len(cmnd) && cmnd[i] == ' ' {
+					value = cmnd[i+1:]
+				}
+			} else if len(cmnd) > 6 && cmnd[5] == ' ' {
+				// Power value format
+				outputNum = 1
+				value = cmnd[6:]
+			} else {
+				// Query format
+				outputNum = 1
+				value = ""
+			}
+
+			// Handle Power command
+			if value == "" {
+				// Query
+				state, ok := powerStates[outputNum]
+				if !ok {
+					state = false
+				}
+				stateStr := "OFF"
+				if state {
+					stateStr = "ON"
+				}
+				if outputNum == 0 || outputNum == 1 {
+					response["POWER"] = stateStr
+				}
+				if outputNum != 1 {
+					response[fmt.Sprintf("POWER%d", outputNum)] = stateStr
+				}
+			} else if value == "1" || value == "ON" || value == "on" || value == "true" || value == "True" {
+				powerStates[outputNum] = true
+				stateStr := "ON"
+				if outputNum == 0 || outputNum == 1 {
+					response["POWER"] = stateStr
+				}
+				if outputNum != 1 {
+					response[fmt.Sprintf("POWER%d", outputNum)] = stateStr
+				}
+			} else if value == "0" || value == "OFF" || value == "off" || value == "false" || value == "False" {
+				powerStates[outputNum] = false
+				stateStr := "OFF"
+				if outputNum == 0 || outputNum == 1 {
+					response["POWER"] = stateStr
+				}
+				if outputNum != 1 {
+					response[fmt.Sprintf("POWER%d", outputNum)] = stateStr
+				}
+			}
+		} else if len(cmnd) >= 6 && cmnd[:6] == "Dimmer" {
+			// Handle Dimmer command
+			var value float64
+			if len(cmnd) > 7 && cmnd[6] == ' ' {
+				fmt.Sscanf(cmnd[7:], "%f", &value)
+				dimmerStates[0] = value
+				if value > 0 {
+					powerStates[0] = true
+					response["POWER"] = "ON"
+				} else {
+					powerStates[0] = false
+					response["POWER"] = "OFF"
+				}
+				response["Dimmer"] = int(value)
+			} else {
+				// Query
+				value, ok := dimmerStates[0]
+				if !ok {
+					value = 0
+				}
+				response["Dimmer"] = int(value)
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+
+	return server
+}
+
 func TestHttpDriver_AsDigitalOut(t *testing.T) {
 
-	address := os.Getenv("TASMOTA_TEST_ADDRESS")
+	server := mockTasmotaServer(t)
+	defer server.Close()
 
-	if len(address) == 0 {
-		address = "192.168.1.46"
-	}
+	// Extract host:port from server URL
+	address := server.URL[7:] // Remove "http://"
 
 	f := HttpDriverFactory()
 
@@ -28,7 +142,7 @@ func TestHttpDriver_AsDigitalOut(t *testing.T) {
 
 	meta := d.Metadata()
 	if len(meta.Capabilities) != 2 {
-		t.Error("Expected 1 capabilities, found:", len(meta.Capabilities))
+		t.Error("Expected 2 capabilities, found:", len(meta.Capabilities))
 	}
 
 	o, ok := d.(hal.DigitalOutputDriver)
@@ -37,7 +151,7 @@ func TestHttpDriver_AsDigitalOut(t *testing.T) {
 	}
 
 	if len(o.DigitalOutputPins()) != 1 {
-		t.Error("Expected a single digital output pwm pin, found:", len(o.DigitalOutputPins()))
+		t.Error("Expected a single digital output pin, found:", len(o.DigitalOutputPins()))
 	}
 
 	p, err := o.DigitalOutputPin(0)
@@ -53,38 +167,34 @@ func TestHttpDriver_AsDigitalOut(t *testing.T) {
 		t.Error("Expected number 0, found: ", p.Number())
 	}
 
-	testRealDevice := os.Getenv("TASMOTA_TEST_REAL_DEVICE")
+	// Test with mock server
+	err = p.Write(true)
+	if err != nil {
+		t.Error("Expected write true in the digital output, error: ", err.Error())
+	}
 
-	if testRealDevice == "True" {
+	if !p.LastState() {
+		t.Error("Expected last state is true")
+	}
 
-		err = p.Write(true)
-		if err != nil {
-			t.Error("Expected write true inn the digital output, error: ", err.Error())
-		}
+	err = p.Write(false)
+	if err != nil {
+		t.Error("Expected write false in the digital output, error: ", err.Error())
+	}
 
-		if !p.LastState() {
-			t.Error("Expected last state is true")
-		}
-
-		err = p.Write(false)
-		if err != nil {
-			t.Error("Expected write false inn the digital output, error: ", err.Error())
-		}
-
-		if p.LastState() {
-			t.Error("Expected last state is false")
-		}
+	if p.LastState() {
+		t.Error("Expected last state is false")
 	}
 
 }
 
 func TestHttpDriver_AsPWMDriver(t *testing.T) {
 
-	address := os.Getenv("TASMOTA_TEST_ADDRESS")
+	server := mockTasmotaServer(t)
+	defer server.Close()
 
-	if len(address) == 0 {
-		address = "192.168.1.46"
-	}
+	// Extract host:port from server URL
+	address := server.URL[7:] // Remove "http://"
 
 	f := HttpDriverFactory()
 
@@ -100,7 +210,7 @@ func TestHttpDriver_AsPWMDriver(t *testing.T) {
 
 	meta := d.Metadata()
 	if len(meta.Capabilities) != 2 {
-		t.Error("Expected 1 capabilities, found:", len(meta.Capabilities))
+		t.Error("Expected 2 capabilities, found:", len(meta.Capabilities))
 	}
 
 	pwm, ok := d.(hal.PWMDriver)
@@ -125,27 +235,23 @@ func TestHttpDriver_AsPWMDriver(t *testing.T) {
 		t.Error("Expected number 0, found: ", p.Number())
 	}
 
-	testRealDevice := os.Getenv("TASMOTA_TEST_REAL_DEVICE")
+	// Test with mock server
+	err = p.Set(100)
+	if err != nil {
+		t.Error("Expected to set 100 in the pwm output, error: ", err.Error())
+	}
 
-	if testRealDevice == "True" {
+	if !p.LastState() {
+		t.Error("Expected last state is true")
+	}
 
-		err = p.Set(100)
-		if err != nil {
-			t.Error("Expected to set 100 in the pwm output, error: ", err.Error())
-		}
+	err = p.Set(0)
+	if err != nil {
+		t.Error("Expected to set 0 in the pwm output, error: ", err.Error())
+	}
 
-		if !p.LastState() {
-			t.Error("Expected last state is true")
-		}
-
-		err = p.Set(0)
-		if err != nil {
-			t.Error("Expected to set 0 in the pwm output, error: ", err.Error())
-		}
-
-		if p.LastState() {
-			t.Error("Expected last state is false")
-		}
+	if p.LastState() {
+		t.Error("Expected last state is false")
 	}
 
 }
