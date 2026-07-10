@@ -256,6 +256,104 @@ func TestHttpDriver_AsPWMDriver(t *testing.T) {
 
 }
 
+func TestParseOutputs_SingleOutput(t *testing.T) {
+	outputs, err := parseOutputs("1")
+	if err != nil {
+		t.Fatal("Unexpected error:", err)
+	}
+	if len(outputs) != 1 || outputs[0] != 1 {
+		t.Errorf("Expected [1], got %v", outputs)
+	}
+}
+
+func TestParseOutputs_DiscreteOutputs(t *testing.T) {
+	outputs, err := parseOutputs("1,2,3")
+	if err != nil {
+		t.Fatal("Unexpected error:", err)
+	}
+	if len(outputs) != 3 || outputs[0] != 1 || outputs[1] != 2 || outputs[2] != 3 {
+		t.Errorf("Expected [1, 2, 3], got %v", outputs)
+	}
+}
+
+func TestParseOutputs_Range(t *testing.T) {
+	outputs, err := parseOutputs("1-3")
+	if err != nil {
+		t.Fatal("Unexpected error:", err)
+	}
+	if len(outputs) != 3 || outputs[0] != 1 || outputs[1] != 2 || outputs[2] != 3 {
+		t.Errorf("Expected [1, 2, 3], got %v", outputs)
+	}
+}
+
+func TestParseOutputs_Mixed(t *testing.T) {
+	outputs, err := parseOutputs("1-3,5,7-9")
+	if err != nil {
+		t.Fatal("Unexpected error:", err)
+	}
+	expected := []int{1, 2, 3, 5, 7, 8, 9}
+	if len(outputs) != len(expected) {
+		t.Errorf("Expected length %d, got %d", len(expected), len(outputs))
+	}
+	for i, v := range expected {
+		if outputs[i] != v {
+			t.Errorf("Expected outputs[%d]=%d, got %d", i, v, outputs[i])
+		}
+	}
+}
+
+func TestParseOutputs_EmptyString(t *testing.T) {
+	_, err := parseOutputs("")
+	if err == nil {
+		t.Error("Expected error for empty string")
+	}
+}
+
+func TestParseOutputs_Duplicates(t *testing.T) {
+	_, err := parseOutputs("1,1")
+	if err == nil {
+		t.Error("Expected error for duplicate output")
+	}
+}
+
+func TestParseOutputs_DuplicatesInRange(t *testing.T) {
+	_, err := parseOutputs("1-3,2")
+	if err == nil {
+		t.Error("Expected error for duplicate output in range")
+	}
+}
+
+func TestParseOutputs_ReversedRange(t *testing.T) {
+	_, err := parseOutputs("3-1")
+	if err == nil {
+		t.Error("Expected error for reversed range")
+	}
+}
+
+func TestParseOutputs_NegativeNumbers(t *testing.T) {
+	_, err := parseOutputs("-1")
+	if err == nil {
+		t.Error("Expected error for negative number")
+	}
+}
+
+func TestParseOutputs_InvalidFormat(t *testing.T) {
+	_, err := parseOutputs("abc")
+	if err == nil {
+		t.Error("Expected error for invalid format")
+	}
+}
+
+func TestParseOutputs_Sorted(t *testing.T) {
+	outputs, err := parseOutputs("3,1,2")
+	if err != nil {
+		t.Fatal("Unexpected error:", err)
+	}
+	if outputs[0] != 1 || outputs[1] != 2 || outputs[2] != 3 {
+		t.Errorf("Expected sorted [1, 2, 3], got %v", outputs)
+	}
+}
+
 func TestHttpDriver_FactoryValidateParameters(t *testing.T) {
 
 	f := HttpDriverFactory()

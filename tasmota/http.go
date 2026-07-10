@@ -7,10 +7,95 @@ import (
 	"github.com/reef-pi/hal"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
+
+// parseOutputs parses an output configuration string and returns a sorted slice of output numbers.
+// Supported formats:
+// - "1" -> [1]
+// - "1,2,3" -> [1, 2, 3]
+// - "1-3" -> [1, 2, 3]
+// - "1-3,5,7-9" -> [1, 2, 3, 5, 7, 8, 9]
+// Returns error for invalid formats, negative numbers, duplicates, or reversed ranges.
+func parseOutputs(config string) ([]int, error) {
+	if config == "" {
+		return nil, errors.New("output configuration cannot be empty")
+	}
+
+	outputMap := make(map[int]bool)
+	var outputs []int
+
+	// Split by comma
+	parts := strings.Split(config, ",")
+
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+
+		if strings.Contains(part, "-") {
+			// Handle range format (e.g., "1-3")
+			rangeParts := strings.Split(part, "-")
+			if len(rangeParts) != 2 {
+				return nil, fmt.Errorf("invalid range format: %s", part)
+			}
+
+			start, err := strconv.Atoi(strings.TrimSpace(rangeParts[0]))
+			if err != nil {
+				return nil, fmt.Errorf("invalid start number in range '%s': %v", part, err)
+			}
+
+			end, err := strconv.Atoi(strings.TrimSpace(rangeParts[1]))
+			if err != nil {
+				return nil, fmt.Errorf("invalid end number in range '%s': %v", part, err)
+			}
+
+			if start < 0 || end < 0 {
+				return nil, fmt.Errorf("output numbers must be non-negative, got range '%s'", part)
+			}
+
+			if start > end {
+				return nil, fmt.Errorf("invalid range '%s': start (%d) is greater than end (%d)", part, start, end)
+			}
+
+			for i := start; i <= end; i++ {
+				if outputMap[i] {
+					return nil, fmt.Errorf("duplicate output number: %d", i)
+				}
+				outputMap[i] = true
+				outputs = append(outputs, i)
+			}
+		} else {
+			// Handle single number format
+			num, err := strconv.Atoi(part)
+			if err != nil {
+				return nil, fmt.Errorf("invalid output number '%s': %v", part, err)
+			}
+
+			if num < 0 {
+				return nil, fmt.Errorf("output numbers must be non-negative, got %d", num)
+			}
+
+			if outputMap[num] {
+				return nil, fmt.Errorf("duplicate output number: %d", num)
+			}
+
+			outputMap[num] = true
+			outputs = append(outputs, num)
+		}
+	}
+
+	if len(outputs) == 0 {
+		return nil, errors.New("no valid output numbers found")
+	}
+
+	// Sort outputs for consistent ordering
+	sort.Ints(outputs)
+
+	return outputs, nil
+}
 
 type httpDriver struct {
 	meta    hal.Metadata
