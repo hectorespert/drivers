@@ -103,6 +103,18 @@ type httpDriver struct {
 	output  int
 }
 
+// pinDriver represents a digital output pin on a Tasmota device
+type pinDriver struct {
+	driver *httpDriver
+	number int
+}
+
+// channelDriver represents a PWM channel on a Tasmota device
+type channelDriver struct {
+	driver *httpDriver
+	number int
+}
+
 func (m *httpDriver) Close() error {
 	return nil
 }
@@ -229,6 +241,122 @@ func (m *httpDriver) DigitalOutputPins() []hal.DigitalOutputPin {
 
 func (m *httpDriver) DigitalOutputPin(_ int) (hal.DigitalOutputPin, error) {
 	return m, nil
+}
+
+// pinDriver methods
+
+func (p *pinDriver) Name() string {
+	return "Tasmota"
+}
+
+func (p *pinDriver) Number() int {
+	return 0
+}
+
+func (p *pinDriver) Write(b bool) error {
+	const baseUri = "http://%s/cm?cmnd=Power%d%%20%t"
+	uri := fmt.Sprintf(baseUri, p.driver.address, p.number, b)
+	resp, err := p.driver.doRequest(uri)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode == 200 {
+		return nil
+	}
+	body, err := p.driver.readBody(resp.Body)
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("HTTP Code:%d. Body:%v", resp.StatusCode, string(body))
+}
+
+func (p *pinDriver) LastState() bool {
+	const urlBase = "http://%s/cm?cmnd=Power%d"
+	uri := fmt.Sprintf(urlBase, p.driver.address, p.number)
+	resp, err := p.driver.doRequest(uri)
+	if err != nil {
+		return false
+	}
+	if resp.StatusCode != 200 {
+		return false
+	}
+	body, err := p.driver.readBody(resp.Body)
+	if err != nil {
+		return false
+	}
+	var result map[string]interface{}
+	err = json.Unmarshal(body, &result)
+	if err != nil {
+		return false
+	}
+
+	if result[fmt.Sprintf("POWER%d", p.number)] == "ON" {
+		return true
+	}
+
+	if result["POWER"] == "ON" {
+		return true
+	}
+
+	return false
+}
+
+// channelDriver methods
+
+func (c *channelDriver) Name() string {
+	return "Tasmota"
+}
+
+func (c *channelDriver) Number() int {
+	return 0
+}
+
+func (c *channelDriver) Set(value float64) error {
+	const urlBase = "http://%s/cm?cmnd=Dimmer%%20%.0f"
+	uri := fmt.Sprintf(urlBase, c.driver.address, value)
+	resp, err := c.driver.doRequest(uri)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode == 200 {
+		return nil
+	}
+	body, err := c.driver.readBody(resp.Body)
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("HTTP Code:%d. Body:%v", resp.StatusCode, string(body))
+}
+
+func (c *channelDriver) LastState() bool {
+	const urlBase = "http://%s/cm?cmnd=Power%d"
+	uri := fmt.Sprintf(urlBase, c.driver.address, c.number)
+	resp, err := c.driver.doRequest(uri)
+	if err != nil {
+		return false
+	}
+	if resp.StatusCode != 200 {
+		return false
+	}
+	body, err := c.driver.readBody(resp.Body)
+	if err != nil {
+		return false
+	}
+	var result map[string]interface{}
+	err = json.Unmarshal(body, &result)
+	if err != nil {
+		return false
+	}
+
+	if result[fmt.Sprintf("POWER%d", c.number)] == "ON" {
+		return true
+	}
+
+	if result["POWER"] == "ON" {
+		return true
+	}
+
+	return false
 }
 
 type factory struct {
