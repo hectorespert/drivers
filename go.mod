@@ -1,6 +1,6 @@
 module github.com/reef-pi/drivers
 
-go 1.23.2
+go 1.26.2
 
 require (
 	github.com/hajimehoshi/go-mp3 v0.3.4
